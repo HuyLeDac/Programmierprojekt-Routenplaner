@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial scale = 1.0">
+    <title>Map User Location </title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
+          integrity="sha256-kLaT2GOSpHechhsozzB+flnD+zUyjE2LlfWPgU04xyI=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"
+            integrity="sha256-WBkoXOwTeyKclOHuWtc+i2uENFpDZ9YPdf5Hf+D7ewM=" crossorigin=""></script>
+
+    <style>
+        #map {
+            height: 720px;
+        }
+    </style>
+</head>
+
+<body>
+<h1>Programmierprojekt Routenplaner</h1>
+<div id="map"></div>
+
+<button id="calcRoute">Calculate route</button>
+<button id="clear-button">Clear</button>
+<label for="lat">Latitude:</label>
+<input type="text" id="lat"/>
+<label for="lon">Longitude:</label>
+<input type="text" id="lon"/>
+<button id="nextNode">Next node</button>
+<button id="exit" style="float: right;">Stop server</button>
+
+
+<p id="myText">Route planner status: Press 'Calculate Route' to calculate a path between two markers.</p>
+<p id="myText2">Next node status: Press 'Next Node' or click on the map to calculate the next node</p>
+<p id="myText3">Markers status: OK</p>
+</body>
+
+<script>
+    //XMLHttpRequest object for sending requests to server
+    let httpRequest = new XMLHttpRequest();
+
+    //set view and zoom
+    const map = L.map('map');
+    map.setView([48.783071, 9.180965], 13);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    //popup, marker and array which holds all markers
+    map.on('click', onMapClick);
+    let markerCounter = 0;
+    let markers = [];
+    let routeLayer;
+
+    const tooManyMarksText = document.getElementById("myText3");
+    const nextNodeText = document.getElementById("myText2");
+
+    //function gets called when clicking on map
+    function onMapClick(e) {
+        if (markerCounter < 2) {
+            nextNodeText.innerHTML = "Next node status: Calculating next node...";
+
+            //request for next possible node
+            httpRequest.open('GET', 'http://localhost:8080/request?algotype=nextNode&start=' + e.latlng.lat + ',' + e.latlng.lng, true);
+            httpRequest.send();
+
+            //store next node lon & lat coordinates
+            let nextNode;
+            httpRequest.onreadystatechange = () => {
+                if (httpRequest.readyState === XMLHttpRequest.DONE && httpRequest.status === 200) {
+
+                    let response = httpRequest.responseText.split("&");
+                    let coord = response[0];
+                    let nodeId = response[1];
+
+                    nextNodeText.innerHTML = "Next node status: Next node is " + coord + "(id: " + nodeId + ")" + " => Clicked at " + e.latlng;
+
+                    //split coordinates into an array
+                    nextNode = JSON.parse(coord);
+
+                    //place marker & popup
+                    const marker = L.marker([nextNode[1], nextNode[0]]).addTo(map);
+                    markers.push(marker);
+                    markerCounter = markerCounter + 1;
+
+                    L.popup()
+                        .setLatLng(e.latlng)
+                        .setContent('You clicked the map at ' + e.latlng + ' The next node is at ' + marker.getLatLng())
+                        .openOn(map);
+                }
+            };
+        } else {
+            //error message
+            const newText = document.createElement("p");
+            tooManyMarksText.innerHTML = "Markers status: You must press 'Clear buttons' if you want to set new markers!";
+            document.body.appendChild(newText);
+        }
+    }
+
+
+    //Calulate route
+    const calcRouteButton = document.getElementById("calcRoute");
+    const calcRouteText = document.getElementById("myText");
+
+    calcRouteButton.addEventListener("click", function () {
+        if (markers.length === 2) {
+            calcRouteText.innerHTML = "Route planner status: Calculating Route...";
+            //berechnen......
+
+            //two coordinates
+            const firstMark = markers[1].getLatLng();
+            const secondMark = markers[0].getLatLng();
+
+            //send AJAX request to server
+            httpRequest.open('GET', 'http://localhost:8080/request?algotype=dijkstra&start=' + firstMark.lat + ',' + firstMark.lng + '&target=' + secondMark.lat + ',' + secondMark.lng, true);
+            httpRequest.send();
+
+            //response
+            httpRequest.onreadystatechange = () => {
+                if (httpRequest.readyState === XMLHttpRequest.DONE && httpRequest.status === 200) {
+                    let response = httpRequest.response.split("&");
+
+                    let firstMarkId = response[1];
+                    let secondMarkId = response[2];
+                    let path = JSON.parse(response[0]);
+
+                    if (path[0] === null) {
+                        calcRouteText.innerHTML = "Route planner status: Route doesn't exist";
+                    } else {
+                        calcRouteText.innerHTML = "Route planner status: finished! Start: " + firstMark + "(id: " + firstMarkId + "), Target: " + secondMark + "(id: " + secondMarkId + ")";
+
+                        let route = {
+                            "type": "FeatureCollection",
+                            "features": [
+                                {
+                                    "type": "Feature",
+                                    "properties": {},
+                                    "geometry": {
+                                        "coordinates": path,
+                                        "type": "LineString"
+                                    }
+                                }
+                            ]
+                        }
+                        routeLayer = L.geoJSON(route).addTo(map);
+                    }
+
+                }
+            };
+        } else {
+            calcRouteText.innerHTML = "Route planner status: You must mark two spots first";
+        }
+    });
+
+    //Calculate next node
+    const nextNodeButton = document.getElementById("nextNode");
+
+    nextNodeButton.addEventListener("click", function () {
+            if (markerCounter < 2) {
+                nextNodeText.innerHTML = "Next node status: Calculating next node...";
+                //berechnen......
+
+                //one coordinate
+                let lat = document.getElementById("lat").value;
+                let lon = document.getElementById("lon").value;
+
+                //send AJAX request to server
+                httpRequest.open('GET', 'http://localhost:8080/request?algotype=nextNode&start=' + lat + ',' + lon, true);
+                httpRequest.send();
+
+                //response
+                httpRequest.onreadystatechange = () => {
+                    if (httpRequest.readyState === XMLHttpRequest.DONE && httpRequest.status === 200) {
+
+                        //split coordinates into an array
+                        let response = httpRequest.responseText.split("&");
+                        let coord = response[0];
+                        let nodeId = response[1];
+
+                        nextNodeText.innerHTML = "Next node status: Next node is " + coord + "(id: " + nodeId + ")" + " => Typed at " + "[" + lat + "," + lon + "]";
+
+                        //place marker & popup
+                        const marker = L.marker([coord[1], coord[0]]).addTo(map);
+                        markers.push(marker);
+                        markerCounter = markerCounter + 1;
+
+                        L.popup()
+                            .setLatLng(marker.getLatLng())
+                            .setContent('This is the next node at ' + marker.getLatLng())
+                            .openOn(map);
+                    }
+                };
+            } else if (markers.length > 1) {
+                nextNodeText.innerHTML = "Next node status: Too many markers, press 'Clear buttons' and try again!";
+            } else {
+                nextNodeText.innerHTML = "Next node status: Mark a spot on the map first!"
+            }
+        }
+    );
+
+    const exitButton = document.getElementById("exit");
+    exitButton.addEventListener("click", function () {
+        //send AJAX request to server
+        httpRequest.open('GET', 'http://localhost:8080/request?algotype=exit', true);
+        httpRequest.send();
+
+        //response
+        httpRequest.onreadystatechange = () => {
+            if (httpRequest.readyState === XMLHttpRequest.DONE && httpRequest.status === 200) {
+                document.getElementById("clear-button").click();
+                calcRouteText.innerHTML = "Route planner status: " + httpRequest.response;
+                nextNodeText.innerHTML = "";
+                tooManyMarksText.innerHTML = "";
+            }
+        }
+    });
+
+    //clear buttons
+    const clearMarkers = document.getElementById("clear-button");
+    clearMarkers.addEventListener('click', function () {
+        markers.forEach(function (marker) {
+            map.removeLayer(marker);
+        });
+        markers = [];
+        markerCounter = 0;
+        map.closePopup();
+        map.removeLayer(routeLayer);
+        calcRouteText.innerHTML = "Route planner status: Press 'Calculate Route' to calculate a path between two markers.";
+        nextNodeText.innerHTML = "Next node status: Press 'Next Node' or click on the map to calculate the next node.";
+        tooManyMarksText.innerHTML = "Markers status: OK";
+    });
+</script>
+</html>
